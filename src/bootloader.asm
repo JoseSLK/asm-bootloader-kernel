@@ -31,20 +31,31 @@ start:
     mov si, msg_loading
     call print_string
 
+    mov cx, 125         ; Número de sectores a leer (suficiente para los 62+ KB del kernel)
+
 .leer:
+    push cx             ; Guardar el contador del bucle
+
     ; Preparar lectura extendida de disco (INT 13h, AH=42h)
     mov ah, 42h         ; Función: leer sectores (modo LBA)
     mov dl, 80h         ; Disco: 0x80 = primer disco duro
     mov si, dap         ; SI apunta al DAP (Disk Address Packet)
     int 13h
 
-    jnc .ok             ; Si no hubo error (Carry=0), saltar a .ok
-    ; Si hubo error, reintentar
-    jmp .leer
+    ; Avanzar al siguiente sector LBA directamente en memoria
+    inc dword [dap_lba]
+
+    ; Avanzar la memoria 512 bytes (sumando 0x20 al segmento)
+    mov ax, [dap_seg]
+    add ax, 0x0020
+    mov [dap_seg], ax
+
+    pop cx              ; Recuperar el contador
+    loop .leer          ; Repetir hasta leer todos los sectores
 
 .ok:
-    ; Saltar a la dirección donde se cargó el kernel
-    jmp 0x0000:0x8000
+    ; Saltar a la dirección donde se cargó el kernel (Segmento 0x0800, offset 0)
+    jmp 0x0800:0x0000
 
 ; ------------------------------------------------------------
 ;  Procedimiento: imprimir cadena terminada en 0
@@ -61,16 +72,19 @@ print_string:
 .done:
     ret
 
+align 4
 ; ------------------------------------------------------------
 ;  DAP — Disk Address Packet (estructura para INT 13h/42h)
 ; ------------------------------------------------------------
 dap:
     db 10h              ; Tamaño del DAP (16 bytes)
     db 00h              ; Reservado (siempre 0)
-    dw 20               ; Número de sectores a leer (20 sectores = 10 KB)
-                        ; Ajustar si el kernel crece
-    dd 0x8000           ; Dirección destino en memoria (offset:segmento)
-                        ; 0x0000:0x8000
+    dw 1                ; Número de sectores a leer POR VUELTA (1 a la vez para no saturar)
+dap_off:
+    dw 0x0000           ; Offset siempre en 0
+dap_seg:
+    dw 0x0800           ; Segmento inicial (0x0800:0000 equivale a 0x8000 físico)
+dap_lba:
     dq 3                ; LBA del sector inicial (sector 3 del disco)
 
 ; ------------------------------------------------------------

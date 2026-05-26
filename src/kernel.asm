@@ -17,7 +17,7 @@
 ; ============================================================
 
 bits 16
-org 0x8000              ; El bootloader carga el kernel aquí
+org 0x0000              ; AHORA ARRANCAMOS EN CERO PARA APROVECHAR TODO EL SEGMENTO
 
 ; ------------------------------------------------------------
 ;  Punto de entrada
@@ -95,6 +95,13 @@ print_linea_horizontal:
 ;  INICIO DEL KERNEL
 ; ============================================================
 start:
+    ; Configurar los segmentos para alinearlos con la nueva base del bootloader
+    mov ax, cs
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov sp, 0xFFFF      ; Pila segura al tope de los 64KB libres
+
     call limpiar_pantalla
 
 ; ------------------------------------------------------------
@@ -516,27 +523,53 @@ print_numero:
 ;  OPCIÓN 2 — Imprimir imagen de los integrantes
 ; ============================================================
 opcion_2:
-    call limpiar_pantalla
-    call print_linea_horizontal
+    ; 1. Cambiar al modo de video VGA 13h (320x200, 256 colores)
+    mov ax, 0013h
+    int 10h
 
-    mov si, msg_titulo_imagen
-    call print_str
-    call nueva_linea
+    ; 2. Enviar la paleta personalizada a los puertos DAC
+    mov dx, 03C8h       ; Puerto de índice DAC
+    xor al, al          ; Empezar en el índice 0
+    out dx, al
 
-    call print_linea_horizontal
-    call nueva_linea
+    mov dx, 03C9h       ; Puerto de datos DAC
+    mov si, imagePalette ; Paleta generada por el script de Python
+    mov cx, 768         ; 256 colores * 3 canales (RGB)
+.cargar_paleta:
+    lodsb               ; Carga byte y avanza
+    out dx, al          ; Envía al puerto
+    loop .cargar_paleta
 
-    ; TODO: implementar impresión de imagen en modo gráfico
+    ; 3. Dibujar la matriz en la memoria de video (Segmento 0xA000)
+    mov ax, 0xA000
+    mov es, ax
+    xor di, di          ; Destino (0,0 de la pantalla)
+    mov si, imageData   ; Píxeles generados por Python
 
-    mov si, msg_wip
-    call print_str
-    call nueva_linea
-    call nueva_linea
+    mov dx, 200         ; Altura: 200 filas
+.bucle_filas:
+    mov cx, 300         ; Ancho de la imagen: 300 píxeles
+    rep movsb           ; Copiar la fila entera
 
-    mov si, msg_volver
-    call print_str
-    call leer_tecla
+    ; Compensar la diferencia de resolución (pantalla 320 vs imagen 300)
+    add di, 20          ; Saltar 20 píxeles para pasar a la siguiente fila real
+    dec dx
+    jnz .bucle_filas
 
+    ; 4. Esperar a que el usuario presione una tecla para salir de la imagen
+.wait_key:
+    mov ah, 00h
+    int 16h
+
+    ; 5. Restaurar el modo de texto original (Modo 03h)
+    mov ax, 0003h
+    int 10h
+
+    ; IMPORTANTE: Restaurar el segmento ES al del kernel antes de volver
+    mov ax, cs
+    mov es, ax
+
+    ; 6. Volver al menú principal
     call limpiar_pantalla
     jmp menu_principal
 
@@ -618,3 +651,10 @@ area_lo             dw 0    ; parte baja del resultado x100
 
 resultado_entero    dw 0    ; parte entera del área final
 resultado_decimal   dw 0    ; parte decimal del área final (centésimas)
+
+; ============================================================
+;  INCLUSIÓN DE IMAGEN
+; ============================================================
+; Asegúrate de que este archivo imageData.asm esté en la misma
+; carpeta que este kernel.asm
+%include "src/imageData.asm"
